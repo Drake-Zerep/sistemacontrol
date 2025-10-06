@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Control de Llaves — Prototipo</title>
+  <style>
+    :root{font-family:Inter, system-ui, Arial;font-size:16px;color:#111}
+    body{margin:0;padding:20px;background:#f6f7fb}
+    .container{max-width:1000px;margin:0 auto;background:#fff;padding:20px;border-radius:10px;box-shadow:0 6px 22px rgba(20,30,60,0.08)}
+    h1{margin:0 0 10px;font-size:20px}
+    form{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:end}
+    label{font-size:13px;color:#333}
+    input,select,button{padding:8px 10px;border-radius:6px;border:1px solid #d7dbe8;font-size:14px}
+    .full{grid-column:1/3}
+    .actions{display:flex;gap:8px}
+    table{width:100%;border-collapse:collapse;margin-top:16px}
+    th,td{padding:8px;border-bottom:1px solid #eef2f7;text-align:left;font-size:13px}
+    th{background:#fafbfd}
+    .small{font-size:12px;color:#666}
+    .controls{display:flex;gap:8px;align-items:center}
+    .hint{font-size:12px;color:#666;margin-top:6px}
+    .import{font-size:13px}
+    .footer{display:flex;justify-content:space-between;align-items:center;margin-top:14px}
+    @media (max-width:700px){form{grid-template-columns:1fr} .full{grid-column:1/2}}
+  </style>
+  <!-- jsPDF from CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" integrity="sha512-+hQ4U6Q0iYyR4mX2yO/8p8F9qbaY6t1G1pQkqAqU1KQnE3v8Qd8qvTtqjz0Q7Y5yZs5x5r7l2H1r1R3fC9F+g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+</head>
+<body>
+  <div class="container">
+    <h1>Control de entrega y recogida de llaves</h1>
+    <p class="small">Prototipo: sube a GitHub Pages o ábrelo localmente. Los registros se guardan en <code>localStorage</code>. Puedes importar una lista de llaves en CSV o editar la lista por defecto.</p>
+
+    <form id="form">
+      <div>
+        <label for="numero">Número de llave</label>
+        <input id="numero" name="numero" placeholder="Ej: 001" required />
+      </div>
+
+      <div>
+        <label for="pertenece">Pertenece a (autocompletado)</label>
+        <input id="pertenece" name="pertenece" placeholder="Oficina Dirección" required />
+      </div>
+
+      <div>
+        <label for="nombre">Nombre de la persona</label>
+        <input id="nombre" name="nombre" placeholder="Nombre y apellidos" required />
+      </div>
+
+      <div>
+        <label for="tipo">Acción</label>
+        <select id="tipo" name="tipo">
+          <option value="Entrega">Entrega</option>
+          <option value="Recogida">Recogida</option>
+        </select>
+      </div>
+
+      <div class="full">
+        <label for="nota">Nota (opcional)</label>
+        <input id="nota" name="nota" placeholder="Observaciones" />
+      </div>
+
+      <div class="full actions">
+        <button id="guardar" type="submit">Guardar registro</button>
+        <button id="limpiar" type="button">Limpiar campo</button>
+        <div style="margin-left:auto" class="import">
+          <label for="csvFile">Importar lista llaves (CSV)</label>
+          <input id="csvFile" type="file" accept="text/csv" />
+        </div>
+      </div>
+    </form>
+
+    <hr />
+
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+      <div class="controls">
+        <label for="from">Desde</label>
+        <input id="from" type="date" />
+      </div>
+      <div class="controls">
+        <label for="to">Hasta</label>
+        <input id="to" type="date" />
+      </div>
+      <div class="controls">
+        <label for="filterKey">Filtrar por número</label>
+        <input id="filterKey" placeholder="Ej: 001" />
+      </div>
+      <button id="filtrar">Aplicar filtros</button>
+      <button id="resetFilters">Reset</button>
+      <button id="exportPdf" style="margin-left:auto">Descargar PDF del listado</button>
+    </div>
+
+    <table id="tabla">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Nº llave</th>
+          <th>Pertenece</th>
+          <th>Nombre</th>
+          <th>Acción</th>
+          <th>Fecha</th>
+          <th>Hora</th>
+          <th>Nota</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <div class="footer">
+      <div class="small">Registros guardados en localStorage (podrás subir a backend después).</div>
+      <div>
+        <button id="downloadCsv">Descargar CSV</button>
+        <button id="clearAll">Borrar todos los registros</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+// ===== Lista por defecto de llaves (puedes editar o importar CSV) =====
+let LLAVES = [
+  { numero: '001', pertenece: 'Oficina Dirección' },
+  { numero: '002', pertenece: 'Almacén Central' },
+  { numero: '003', pertenece: 'Taller Mecánica' },
+  { numero: '004', pertenece: 'Sala Reuniones 1' }
+];
+
+const LS_KEY = 'control_llaves_registros_v1';
+
+// ===== Utilidades =====
+function ahora() {
+  const d = new Date();
+  const fecha = d.toISOString().slice(0,10);
+  const hora = d.toTimeString().slice(0,8);
+  return { fecha, hora, iso: d.toISOString() };
+}
+
+function loadRegistros(){
+  try{ return JSON.parse(localStorage.getItem(LS_KEY) || '[]'); }catch(e){return []}
+}
+function saveRegistros(arr){
+  localStorage.setItem(LS_KEY, JSON.stringify(arr));
+}
+
+// ===== DOM =====
+const form = document.getElementById('form');
+const numeroEl = document.getElementById('numero');
+const perteneceEl = document.getElementById('pertenece');
+const nombreEl = document.getElementById('nombre');
+const tipoEl = document.getElementById('tipo');
+const notaEl = document.getElementById('nota');
+const tablaBody = document.querySelector('#tabla tbody');
+const fromEl = document.getElementById('from');
+const toEl = document.getElementById('to');
+const filterKeyEl = document.getElementById('filterKey');
+
+// Inicializar
+let registros = loadRegistros();
+renderTabla(registros);
+
+// Autocompletado por número
+numeroEl.addEventListener('input', ()=>{
+  const v = numeroEl.value.trim();
+  const found = LLAVES.find(x=>x.numero === v);
+  if(found) perteneceEl.value = found.pertenece;
+});
+
+// Guardar registro
+form.addEventListener('submit', (e)=>{
+  e.preventDefault();
+  const num = numeroEl.value.trim();
+  const pertenece = perteneceEl.value.trim();
+  const nombre = nombreEl.value.trim();
+  const tipo = tipoEl.value;
+  const nota = notaEl.value.trim();
+  if(!num || !pertenece || !nombre) { alert('Rellena número, pertenece y nombre.'); return; }
+  const t = ahora();
+  const nuevo = { id: Date.now(), numero: num, pertenece, nombre, tipo, fecha: t.fecha, hora: t.hora, iso: t.iso, nota };
+  registros.unshift(nuevo); // añadir al inicio
+  saveRegistros(registros);
+  renderTabla(registros);
+  form.reset();
+  numeroEl.focus();
+});
+
+// Limpiar campos
+document.getElementById('limpiar').addEventListener('click', ()=> form.reset());
+
+// Render tabla con filtros
+function renderTabla(data){
+  tablaBody.innerHTML = '';
+  if(!data.length) {
+    tablaBody.innerHTML = '<tr><td colspan="8" class="small">No hay registros</td></tr>';
+    return;
+  }
+  data.forEach((r,i)=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${i+1}</td>
+      <td>${r.numero}</td>
+      <td>${r.pertenece}</td>
+      <td>${r.nombre}</td>
+      <td>${r.tipo}</td>
+      <td>${r.fecha}</td>
+      <td>${r.hora}</td>
+      <td>${r.nota || ''}</td>`;
+    tablaBody.appendChild(tr);
+  });
+}
+
+// Aplicar filtros
+document.getElementById('filtrar').addEventListener('click', ()=>{
+  let filtered = registros.slice();
+  const from = fromEl.value;
+  const to = toEl.value;
+  const key = filterKeyEl.value.trim();
+  if(from) filtered = filtered.filter(r => r.fecha >= from);
+  if(to) filtered = filtered.filter(r => r.fecha <= to);
+  if(key) filtered = filtered.filter(r => r.numero.includes(key));
+  renderTabla(filtered);
+});
+
+// Reset filtros
+document.getElementById('resetFilters').addEventListener('click', ()=>{
+  fromEl.value = '';
+  toEl.value = '';
+  filterKeyEl.value = '';
+  renderTabla(registros);
+});
+
+// Descargar CSV de registros (todos)
+document.getElementById('downloadCsv').addEventListener('click', ()=>{
+  const rows = [['id','numero','pertenece','nombre','tipo','fecha','hora','nota']];
+  registros.forEach(r=> rows.push([r.id,r.numero,r.pertenece,r.nombre,r.tipo,r.fecha,r.hora,`"${(r.nota||'').replace(/"/g,'""')}"`]))
+  const csv = rows.map(r=> r.join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'registros_llaves.csv'; a.click(); URL.revokeObjectURL(url);
+});
+
+// Borrar todo
+document.getElementById('clearAll').addEventListener('click', ()=>{
+  if(!confirm('¿Borrar todos los registros? Esta acción es irreversible.')) return;
+  registros = [];
+  saveRegistros(registros);
+  renderTabla(registros);
+});
+
+// Exportar PDF del listado filtrado
+document.getElementById('exportPdf').addEventListener('click', async ()=>{
+  // capturamos tabla actualmente mostrada
+  const rows = [];
+  const trs = document.querySelectorAll('#tabla tbody tr');
+  trs.forEach(tr=>{
+    const cols = Array.from(tr.querySelectorAll('td')).map(td=>td.textContent.trim());
+    if(cols.length === 8) rows.push(cols);
+  });
+  if(rows.length === 0) { alert('No hay filas para exportar'); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF('l','pt','a4');
+  doc.setFontSize(12);
+  const margin = 40;
+  const startY = 40;
+  doc.text('Listado de control de llaves', margin, 24);
+  const colWidths = [30,60,170,140,60,70,60,150];
+  let y = startY;
+  // header
+  const headers = ['#','Nº','Pertenece','Nombre','Acción','Fecha','Hora','Nota'];
+  let x = margin;
+  headers.forEach((h,i)=>{ doc.text(String(h), x+2, y); x += colWidths[i]; });
+  y += 18;
+  // rows
+  rows.forEach((r,ri)=>{
+    x = margin;
+    r.forEach((c,i)=>{ doc.text(String(c).slice(0,60), x+2, y); x += colWidths[i]; });
+    y += 16;
+    if(y > 540){ doc.addPage(); y = startY; }
+  });
+  doc.save('listado_llaves.pdf');
+});
+
+// Importar CSV de llaves (numero,pertenece)
+document.getElementById('csvFile').addEventListener('change', (ev)=>{
+  const f = ev.target.files[0];
+  if(!f) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const txt = e.target.result;
+    const lines = txt.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+    const parsed = [];
+    lines.forEach((ln,i)=>{
+      const parts = ln.split(',').map(p=>p.trim());
+      if(i===0 && (parts[0].toLowerCase().includes('numero')||parts[1]&&parts[1].toLowerCase().includes('pertenece'))) return; // skip header
+      if(parts.length>=2) parsed.push({ numero: parts[0].replace(/^"|"$/g,''), pertenece: parts.slice(1).join(',').replace(/^"|"$/g,'') });
+    });
+    if(parsed.length===0) { alert('CSV no válido'); return; }
+    // reemplaza la lista actual de llaves
+    LLAVES = parsed;
+    alert('Importadas ' + parsed.length + ' llaves. Ahora al introducir número se autocompletará el "pertenece" si coincide.');
+  };
+  reader.readAsText(f);
+});
+
+// Permitir editar lista de llaves rápida (console)
+window.LLAVES = LLAVES;
+window.registros = registros;
+
+</script>
+</body>
+</html>
